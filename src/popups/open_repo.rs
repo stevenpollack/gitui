@@ -12,7 +12,7 @@ use anyhow::Result;
 use asyncgit::sync::{repo_open_error, RepoPath};
 use crossterm::event::Event;
 use ratatui::{layout::Rect, Frame};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Prompt for a filesystem path and re-open the app against that repo.
 ///
@@ -140,18 +140,17 @@ impl OpenRepoPopup {
 	}
 }
 
-/// Expand a leading `~`/`~/` to `$HOME` and make the path absolute
-/// (resolved against the process cwd for relative input). Absolute
-/// input passes through unchanged. Does not require the path to exist;
-/// validity is checked separately via [`repo_open_error`].
+/// Expand a leading `~`/`~/` to the user's home directory and make the
+/// path absolute (resolved against the process cwd for relative input).
+/// Absolute input passes through unchanged. Does not require the path to
+/// exist; validity is checked separately via [`repo_open_error`].
 fn expand_path(raw: &str) -> PathBuf {
 	let expanded = if raw == "~" {
-		std::env::var("HOME")
-			.map_or_else(|_| PathBuf::from(raw), PathBuf::from)
+		dirs::home_dir().unwrap_or_else(|| PathBuf::from(raw))
 	} else if let Some(rest) = raw.strip_prefix("~/") {
-		std::env::var("HOME").map_or_else(
-			|_| PathBuf::from(raw),
-			|home| Path::new(&home).join(rest),
+		dirs::home_dir().map_or_else(
+			|| PathBuf::from(raw),
+			|home| home.join(rest),
 		)
 	} else {
 		PathBuf::from(raw)

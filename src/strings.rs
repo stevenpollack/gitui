@@ -1036,10 +1036,13 @@ pub mod commands {
 	}
 
 	pub fn open_repo_confirm_msg(
-		_key_config: &SharedKeyConfig,
+		key_config: &SharedKeyConfig,
 	) -> CommandText {
 		CommandText::new(
-			"Open Repo [Enter]".to_string(),
+			format!(
+				"Open Repo [{}]",
+				key_config.get_hint(key_config.keys.enter),
+			),
 			"open the entered repository path",
 			CMD_GROUP_GENERAL,
 		)
