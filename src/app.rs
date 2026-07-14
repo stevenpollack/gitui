@@ -16,8 +16,8 @@ use crate::{
 		ConfirmPopup, CreateBranchPopup, CreateRemotePopup,
 		CreateWorktreePopup, ExternalEditorPopup, FetchPopup,
 		FileRevlogPopup, FuzzyFindPopup, GotoLinePopup, HelpPopup,
-		InspectCommitPopup, LogSearchPopupPopup, MsgPopup,
-		OptionsPopup, PullPopup, PushPopup, PushTagsPopup,
+		InspectCommitOpen, InspectCommitPopup, LogSearchPopupPopup,
+		MsgPopup, OptionsPopup, PullPopup, PushPopup, PushTagsPopup,
 		RemoteListPopup, RenameBranchPopup, RenameRemotePopup,
 		ResetPopup, RevisionFilesPopup, StashMsgPopup,
 		SubmodulesListPopup, TagCommitPopup, TagListPopup,
@@ -370,6 +370,10 @@ impl App {
 					self.key_config.keys.view_worktrees,
 				) {
 					self.worktree_popup.open()?;
+					NeedsUpdate::ALL
+				} else if key_match(k, self.key_config.keys.diff_base)
+				{
+					self.open_diff_vs_base("HEAD");
 					NeedsUpdate::ALL
 				} else {
 					NeedsUpdate::empty()
@@ -1133,6 +1137,28 @@ impl App {
 		}
 	}
 
+	fn open_diff_vs_base(&self, revision: &str) {
+		match sync::diff_range_vs_base(&self.repo.borrow(), revision)
+		{
+			Ok(range) => {
+				self.queue.push(InternalEvent::OpenPopup(
+					StackablePopupOpen::CompareCommits(
+						InspectCommitOpen {
+							commit_id: range.new,
+							compare_id: Some(range.old),
+							tags: None,
+						},
+					),
+				));
+			}
+			Err(e) => {
+				self.queue.push(InternalEvent::ShowErrorMsg(
+					format!("diff vs base error:\n{e}"),
+				));
+			}
+		}
+	}
+
 	fn commands(&self, force_all: bool) -> Vec<CommandInfo> {
 		let mut res = Vec::new();
 
@@ -1176,6 +1202,15 @@ impl App {
 		res.push(
 			CommandInfo::new(
 				strings::commands::view_worktrees(&self.key_config),
+				true,
+				!self.any_popup_visible(),
+			)
+			.order(order::NAV),
+		);
+
+		res.push(
+			CommandInfo::new(
+				strings::commands::diff_vs_base(&self.key_config),
 				true,
 				!self.any_popup_visible(),
 			)

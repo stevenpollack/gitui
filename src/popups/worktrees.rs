@@ -5,13 +5,15 @@ use crate::{
 		DrawableComponent, EventState, ScrollType, VerticalScroll,
 	},
 	keys::{key_match, SharedKeyConfig},
-	queue::{Action, InternalEvent, Queue},
+	popups::InspectCommitOpen,
+	queue::{Action, InternalEvent, Queue, StackablePopupOpen},
 	strings,
 	ui::{self, Size},
 };
 use anyhow::Result;
 use asyncgit::sync::{
-	get_worktrees, toggle_worktree_lock, RepoPathRef, WorktreeInfo,
+	diff_range_vs_base, get_worktrees, toggle_worktree_lock,
+	RepoPathRef, WorktreeInfo,
 };
 use crossterm::event::Event;
 use ratatui::{
@@ -122,6 +124,12 @@ impl Component for WorktreesPopup {
 				self.can_lock_worktree(),
 				true,
 			));
+
+			out.push(CommandInfo::new(
+				strings::commands::diff_vs_base(&self.key_config),
+				self.can_diff_worktree(),
+				true,
+			));
 		}
 		visibility_blocking(self)
 	}
@@ -202,6 +210,8 @@ impl Component for WorktreesPopup {
 					}
 					self.update_worktrees()?;
 				}
+			} else if key_match(e, self.key_config.keys.diff_base) {
+				self.diff_selected_worktree_vs_base();
 			} else if key_match(
 				e,
 				self.key_config.keys.cmd_bar_toggle,
@@ -276,6 +286,43 @@ impl WorktreesPopup {
 
 	fn can_lock_worktree(&self) -> bool {
 		self.selected_entry().is_some_and(|w| !w.is_main)
+	}
+
+	fn can_diff_worktree(&self) -> bool {
+		self.selected_entry().is_some_and(|w| w.branch.is_some())
+	}
+
+	/// opens the compare-commits view for the selected worktree's
+	/// branch against the repo's base branch (main/master).
+	fn diff_selected_worktree_vs_base(&mut self) {
+		let branch =
+			self.selected_entry().and_then(|w| w.branch.clone());
+
+		let Some(branch) = branch else {
+			return;
+		};
+
+		let range = diff_range_vs_base(&self.repo.borrow(), &branch);
+
+		match range {
+			Ok(range) => {
+				self.queue.push(InternalEvent::OpenPopup(
+					StackablePopupOpen::CompareCommits(
+						InspectCommitOpen {
+							commit_id: range.new,
+							compare_id: Some(range.old),
+							tags: None,
+						},
+					),
+				));
+				self.hide();
+			}
+			Err(err) => {
+				self.queue.push(InternalEvent::ShowErrorMsg(
+					format!("diff vs base error:\n{err}"),
+				));
+			}
+		}
 	}
 
 	//TODO: dedup this almost identical with BranchListComponent

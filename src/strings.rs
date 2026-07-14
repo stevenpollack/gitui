@@ -971,6 +971,17 @@ pub mod commands {
 		)
 	}
 
+	pub fn diff_vs_base(key_config: &SharedKeyConfig) -> CommandText {
+		CommandText::new(
+			format!(
+				"Diff vs main [{}]",
+				key_config.get_hint(key_config.keys.diff_base),
+			),
+			"compare the branch against main/master (merge-base)",
+			CMD_GROUP_GENERAL,
+		)
+	}
+
 	pub fn open_worktree(
 		key_config: &SharedKeyConfig,
 	) -> CommandText {
