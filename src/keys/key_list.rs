@@ -134,6 +134,7 @@ pub struct KeysList {
 	pub commit: GituiKeyEvent,
 	pub newline: GituiKeyEvent,
 	pub goto_line: GituiKeyEvent,
+	pub open_repo: GituiKeyEvent,
 }
 
 #[rustfmt::skip]
@@ -237,6 +238,7 @@ impl Default for KeysList {
 			commit: GituiKeyEvent::new(KeyCode::Char('d'),  KeyModifiers::CONTROL),
 			newline: GituiKeyEvent::new(KeyCode::Enter,  KeyModifiers::empty()),
 			goto_line: GituiKeyEvent::new(KeyCode::Char('L'),  KeyModifiers::SHIFT),
+			open_repo: GituiKeyEvent::new(KeyCode::Char('O'),  KeyModifiers::SHIFT),
 		}
 	}
 }

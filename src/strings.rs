@@ -377,6 +377,14 @@ pub fn create_worktree_popup_msg(
 	"path (absolute, or relative to repo root — e.g. ../feature-x)"
 		.to_string()
 }
+pub fn open_repo_popup_title(
+	_key_config: &SharedKeyConfig,
+) -> String {
+	"Open Repository".to_string()
+}
+pub fn open_repo_popup_msg(_key_config: &SharedKeyConfig) -> String {
+	"path to a git repository (absolute, ~/… or relative)".to_string()
+}
 pub fn rename_remote_popup_title(
 	_key_config: &SharedKeyConfig,
 ) -> String {
@@ -1010,6 +1018,29 @@ pub mod commands {
 				key_config.get_hint(key_config.keys.diff_base),
 			),
 			"compare the branch against main/master (merge-base)",
+			CMD_GROUP_GENERAL,
+		)
+	}
+
+	pub fn open_repo_popup(
+		key_config: &SharedKeyConfig,
+	) -> CommandText {
+		CommandText::new(
+			format!(
+				"Open Repo [{}]",
+				key_config.get_hint(key_config.keys.open_repo),
+			),
+			"open a different repository",
+			CMD_GROUP_GENERAL,
+		)
+	}
+
+	pub fn open_repo_confirm_msg(
+		_key_config: &SharedKeyConfig,
+	) -> CommandText {
+		CommandText::new(
+			"Open Repo [Enter]".to_string(),
+			"open the entered repository path",
 			CMD_GROUP_GENERAL,
 		)
 	}
