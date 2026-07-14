@@ -48,7 +48,8 @@ pub use branch::{
 	validate_branch_name, BranchCompare, BranchDetails, BranchInfo,
 };
 pub use branch_diff::{
-	diff_range_vs_base, merge_base, resolve_base_branch,
+	diff_range_vs_base, diff_range_vs_ref, merge_base,
+	resolve_base_branch,
 };
 pub use commit::{amend, commit, tag_commit};
 pub use commit_details::{

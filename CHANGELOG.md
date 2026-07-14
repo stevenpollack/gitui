@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * worktrees popup: create a new worktree with a new branch ([c] from the worktrees list)
 * worktrees popup: remove a worktree ([Shift+D], refused if it is dirty or locked) and lock/unlock it ([l])
 * diff a branch/worktree against main/master ([v]) — opens the compare view against the merge-base
+* branches popup: diff your current branch (HEAD) against the selected branch ([v], merge-base)
 
 ### Changed
 * use [tombi](https://github.com/tombi-toml/tombi) for all toml file formatting

@@ -982,6 +982,19 @@ pub mod commands {
 		)
 	}
 
+	pub fn diff_vs_branch(
+		key_config: &SharedKeyConfig,
+	) -> CommandText {
+		CommandText::new(
+			format!(
+				"Diff since branch-point [{}]",
+				key_config.get_hint(key_config.keys.diff_base),
+			),
+			"your branch's own changes since it forked from the selected branch (merge-base)",
+			CMD_GROUP_BRANCHES,
+		)
+	}
+
 	pub fn open_worktree(
 		key_config: &SharedKeyConfig,
 	) -> CommandText {
