@@ -1,7 +1,9 @@
 use super::{
+	diff_highlight::{AsyncDiffHighlightJob, LineHighlight},
 	utils::scroll_horizontal::HorizontalScroll,
-	utils::scroll_vertical::VerticalScroll, CommandBlocking,
-	Direction, DrawableComponent, HorizontalScrollType, ScrollType,
+	utils::scroll_vertical::VerticalScroll,
+	CommandBlocking, Direction, DrawableComponent,
+	HorizontalScrollType, ScrollType,
 };
 use crate::{
 	app::Environment,
@@ -13,10 +15,10 @@ use crate::{
 	string_utils::trim_offset,
 	strings, try_or_popup,
 	ui::style::SharedTheme,
-	ui::SyntaxText,
 };
 use anyhow::Result;
 use asyncgit::{
+	asyncjob::AsyncSingleJob,
 	hash,
 	sync::{self, diff::DiffLinePosition, RepoPathRef},
 	DiffLine, DiffLineType, FileDiff,
@@ -27,14 +29,18 @@ use ratatui::{
 	layout::Rect,
 	style::Style,
 	symbols,
-	text::{Line, Span, Text},
+	text::{Line, Span},
 	widgets::{Block, Borders, Paragraph},
 	Frame,
 };
-use std::{borrow::Cow, cell::Cell, cmp, ops::Range, path::Path};
+use std::{
+	borrow::Cow,
+	cell::{Cell, RefCell},
+	cmp,
+	ops::Range,
+	path::Path,
+};
 use unicode_width::UnicodeWidthStr;
-
-type LineHighlight = Vec<(Range<usize>, Style)>;
 
 /// Bundles the two hunk-position flags `get_line_to_add` needs to
 /// pick the left gutter glyph/style — kept together to stay under
@@ -44,53 +50,6 @@ type LineHighlight = Vec<(Range<usize>, Style)>;
 struct HunkLineFlags {
 	selected_hunk: bool,
 	end_of_hunk: bool,
-}
-
-#[derive(Clone, Copy)]
-enum Side {
-	New(usize),
-	Old(usize),
-	Skip,
-}
-
-fn push_expanded_line(buf: &mut String, content: &str) {
-	let expanded = tabs_to_spaces(content.to_string());
-	buf.push_str(expanded.trim_end_matches(['\n', '\r']));
-	buf.push('\n');
-}
-
-fn highlight_side(
-	text: &str,
-	path: &str,
-	syntax_theme: &str,
-) -> Vec<LineHighlight> {
-	if text.is_empty() {
-		return Vec::new();
-	}
-	let Ok(styled) = SyntaxText::new_sync(
-		text.to_string(),
-		Path::new(path),
-		syntax_theme,
-	) else {
-		return Vec::new();
-	};
-	let rendered: Text = (&styled).into();
-	rendered
-		.lines
-		.into_iter()
-		.map(|line| {
-			let mut offset = 0_usize;
-			line.spans
-				.into_iter()
-				.map(|span| {
-					let len = span.content.len();
-					let range = offset..offset + len;
-					offset += len;
-					(range, span.style)
-				})
-				.collect()
-		})
-		.collect()
 }
 
 #[derive(Default)]
@@ -181,7 +140,8 @@ pub struct DiffComponent {
 	key_config: SharedKeyConfig,
 	is_immutable: bool,
 	options: SharedOptions,
-	syntax_highlight: Vec<Option<LineHighlight>>,
+	syntax_highlight: RefCell<Vec<Option<LineHighlight>>>,
+	highlight_job: AsyncSingleJob<AsyncDiffHighlightJob>,
 }
 
 impl DiffComponent {
@@ -204,7 +164,10 @@ impl DiffComponent {
 			is_immutable,
 			repo: env.repo.clone(),
 			options: env.options.clone(),
-			syntax_highlight: Vec::new(),
+			syntax_highlight: RefCell::new(Vec::new()),
+			highlight_job: AsyncSingleJob::new(
+				env.sender_app.clone(),
+			),
 		}
 	}
 	///
@@ -229,6 +192,8 @@ impl DiffComponent {
 		self.selection = Selection::Single(0);
 		self.selected_hunk = None;
 		self.pending = pending;
+		self.syntax_highlight.borrow_mut().clear();
+		self.highlight_job.cancel();
 	}
 	///
 	pub fn update(
@@ -283,16 +248,20 @@ impl DiffComponent {
 				self.update_selection(old_selection);
 			}
 
-			self.recompute_highlight();
+			self.spawn_highlight();
 		}
 	}
 
 	const MAX_HIGHLIGHT_LINES: usize = 10_000;
 
-	fn recompute_highlight(&mut self) {
-		self.syntax_highlight = Vec::new();
+	/// Spawns the syntect highlight for the current diff on the
+	/// shared threadpool (see [`AsyncDiffHighlightJob`]). The result
+	/// is picked up later by [`Self::poll_highlight`] during `draw`.
+	fn spawn_highlight(&self) {
+		self.syntax_highlight.borrow_mut().clear();
 
 		if !self.options.borrow().diff_highlight_style().is_on() {
+			self.highlight_job.cancel();
 			return;
 		}
 
@@ -306,47 +275,32 @@ impl DiffComponent {
 			return;
 		}
 
-		let mut new_text = String::new();
-		let mut old_text = String::new();
-		let mut sides: Vec<Side> = Vec::with_capacity(diff.lines);
-		let (mut ni, mut oi) = (0_usize, 0_usize);
+		let lines: Vec<(String, DiffLineType)> = diff
+			.hunks
+			.iter()
+			.flat_map(|h| h.lines.iter())
+			.map(|l| (l.content.as_ref().to_string(), l.line_type))
+			.collect();
 
-		for line in diff.hunks.iter().flat_map(|h| h.lines.iter()) {
-			match line.line_type {
-				DiffLineType::Header => sides.push(Side::Skip),
-				DiffLineType::Add => {
-					push_expanded_line(&mut new_text, &line.content);
-					sides.push(Side::New(ni));
-					ni += 1;
-				}
-				DiffLineType::Delete => {
-					push_expanded_line(&mut old_text, &line.content);
-					sides.push(Side::Old(oi));
-					oi += 1;
-				}
-				DiffLineType::None => {
-					push_expanded_line(&mut new_text, &line.content);
-					push_expanded_line(&mut old_text, &line.content);
-					sides.push(Side::New(ni));
-					ni += 1;
-					oi += 1;
+		let path = self.current.path.clone();
+		let theme = self.theme.get_syntax();
+		let hash = self.current.hash;
+
+		self.highlight_job.spawn(AsyncDiffHighlightJob::new(
+			hash, lines, path, theme,
+		));
+	}
+
+	/// Applies a finished highlight job's result if it matches the
+	/// currently displayed diff (stale results are discarded).
+	fn poll_highlight(&self) {
+		if let Some(job) = self.highlight_job.take_last() {
+			if let Some((hash, result)) = job.result() {
+				if hash == self.current.hash {
+					*self.syntax_highlight.borrow_mut() = result;
 				}
 			}
 		}
-
-		let path = self.current.path.clone();
-		let syntax = self.theme.get_syntax();
-		let new_hl = highlight_side(&new_text, &path, &syntax);
-		let old_hl = highlight_side(&old_text, &path, &syntax);
-
-		self.syntax_highlight = sides
-			.into_iter()
-			.map(|side| match side {
-				Side::New(i) => new_hl.get(i).cloned(),
-				Side::Old(i) => old_hl.get(i).cloned(),
-				Side::Skip => None,
-			})
-			.collect();
 	}
 
 	fn move_selection(&mut self, move_type: ScrollType) {
@@ -463,6 +417,8 @@ impl DiffComponent {
 			} else {
 				let mut res: Vec<Line> = Vec::new();
 
+				let highlights = self.syntax_highlight.borrow();
+
 				let min = self.vertical_scroll.get_top();
 				let max = min + height as usize;
 
@@ -489,8 +445,7 @@ impl DiffComponent {
 							if line_cursor >= min
 								&& line_cursor <= max
 							{
-								let highlight = self
-									.syntax_highlight
+								let highlight = highlights
 									.get(line_cursor)
 									.and_then(Option::as_ref)
 									.map(Vec::as_slice);
@@ -933,6 +888,8 @@ impl DiffComponent {
 
 impl DrawableComponent for DiffComponent {
 	fn draw(&self, f: &mut Frame, r: Rect) -> Result<()> {
+		self.poll_highlight();
+
 		self.current_size.set((
 			r.width.saturating_sub(2),
 			r.height.saturating_sub(2),
@@ -1203,7 +1160,18 @@ impl Component for DiffComponent {
 					self.key_config.keys.diff_toggle_syntax,
 				) {
 					self.options.borrow_mut().diff_cycle_highlight();
-					self.recompute_highlight();
+					let style =
+						self.options.borrow().diff_highlight_style();
+					if !style.is_on() {
+						self.syntax_highlight.borrow_mut().clear();
+						self.highlight_job.cancel();
+					} else if self
+						.syntax_highlight
+						.borrow()
+						.is_empty()
+					{
+						self.spawn_highlight();
+					}
 					Ok(EventState::Consumed)
 				} else {
 					Ok(EventState::NotConsumed)
@@ -1310,20 +1278,6 @@ mod tests {
 				)
 			);
 		}
-	}
-
-	#[test]
-	fn test_highlight_side_tokenizes_rust_code() {
-		let theme = Theme::default();
-
-		let result = highlight_side(
-			"let x = 42;\n",
-			"f.rs",
-			&theme.get_syntax(),
-		);
-
-		assert!(!result.is_empty());
-		assert!(result[0].len() > 1);
 	}
 
 	#[test]
