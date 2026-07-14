@@ -50,6 +50,27 @@ impl DiffHighlightStyle {
 	}
 }
 
+#[derive(
+	Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize,
+)]
+pub enum DiffView {
+	#[default]
+	Unified,
+	Split,
+}
+
+impl DiffView {
+	pub const fn next(self) -> Self {
+		match self {
+			Self::Unified => Self::Split,
+			Self::Split => Self::Unified,
+		}
+	}
+	pub const fn is_split(self) -> bool {
+		matches!(self, Self::Split)
+	}
+}
+
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct OptionsData {
 	pub tab: usize,
@@ -58,6 +79,8 @@ struct OptionsData {
 	pub commit_msgs: Vec<String>,
 	#[serde(default)]
 	pub diff_highlight_style: Option<DiffHighlightStyle>,
+	#[serde(default)]
+	pub diff_view: Option<DiffView>,
 }
 
 const COMMIT_MSG_HISTORY_LENGTH: usize = 20;
@@ -150,6 +173,16 @@ impl Options {
 	pub fn diff_cycle_highlight(&mut self) {
 		let next = self.diff_highlight_style().next();
 		self.data.diff_highlight_style = Some(next);
+		self.save();
+	}
+
+	pub fn diff_view(&self) -> DiffView {
+		self.data.diff_view.unwrap_or_default()
+	}
+
+	pub fn diff_toggle_view(&mut self) {
+		let next = self.diff_view().next();
+		self.data.diff_view = Some(next);
 		self.save();
 	}
 

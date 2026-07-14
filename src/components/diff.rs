@@ -26,7 +26,7 @@ use asyncgit::{
 use bytesize::ByteSize;
 use crossterm::event::Event;
 use ratatui::{
-	layout::Rect,
+	layout::{Alignment, Constraint, Layout, Rect},
 	style::Style,
 	symbols,
 	text::{Line, Span},
@@ -50,6 +50,127 @@ use unicode_width::UnicodeWidthStr;
 struct HunkLineFlags {
 	selected_hunk: bool,
 	end_of_hunk: bool,
+}
+
+/// One visual row of the split (side-by-side) diff. `left`/`right` are
+/// FLAT diff-line indices (matching `build_highlight`'s indexing), or
+/// `None` for a blank pad cell on that side.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct SplitRow {
+	left: Option<usize>,
+	right: Option<usize>,
+}
+
+/// Emits paired change rows from the accumulated deletion/addition flat
+/// indices, then clears both buffers. Deletions map to the left
+/// column, additions to the right; an unpaired line gets a blank cell
+/// on the opposite side.
+fn flush_split_change(
+	rows: &mut Vec<SplitRow>,
+	dels: &mut Vec<usize>,
+	adds: &mut Vec<usize>,
+) {
+	let n = dels.len().max(adds.len());
+	for i in 0..n {
+		rows.push(SplitRow {
+			left: dels.get(i).copied(),
+			right: adds.get(i).copied(),
+		});
+	}
+	dels.clear();
+	adds.clear();
+}
+
+/// Builds the side-by-side row model for `diff`. Deletions align on the
+/// left column, additions on the right, context/header lines span both
+/// columns. The running `flat` counter advances for every line (headers
+/// included) so the indices line up with the flat indexing used by
+/// [`DiffComponent::get_text`] and `build_highlight`.
+fn build_split_rows(diff: &FileDiff) -> Vec<SplitRow> {
+	let mut rows = Vec::new();
+	let (mut pending_del, mut pending_add): (Vec<usize>, Vec<usize>) =
+		(Vec::new(), Vec::new());
+	let mut flat = 0_usize;
+
+	for hunk in &diff.hunks {
+		for line in &hunk.lines {
+			match line.line_type {
+				DiffLineType::Header | DiffLineType::None => {
+					flush_split_change(
+						&mut rows,
+						&mut pending_del,
+						&mut pending_add,
+					);
+					rows.push(SplitRow {
+						left: Some(flat),
+						right: Some(flat),
+					});
+				}
+				DiffLineType::Delete => {
+					if !pending_add.is_empty() {
+						flush_split_change(
+							&mut rows,
+							&mut pending_del,
+							&mut pending_add,
+						);
+					}
+					pending_del.push(flat);
+				}
+				DiffLineType::Add => pending_add.push(flat),
+			}
+			flat += 1;
+		}
+	}
+
+	flush_split_change(&mut rows, &mut pending_del, &mut pending_add);
+
+	rows
+}
+
+/// Flattens all hunk lines of `diff` into a single in-order slice of
+/// `DiffLine` references, so a FLAT line index can be resolved in O(1).
+fn flat_diff_lines(diff: &FileDiff) -> Vec<&DiffLine> {
+	diff.hunks.iter().flat_map(|h| h.lines.iter()).collect()
+}
+
+/// Emits the syntect foreground spans for `content`, clipped to the
+/// horizontally-scrolled visible window (`scrolled` bytes trimmed from
+/// the left). Token gaps are filled with `bg`; highlighted tokens use
+/// `seg_style.patch(bg)`. Shared by the unified and split renderers.
+fn push_clipped_spans(
+	spans: &mut Vec<Span<'static>>,
+	segments: &[(Range<usize>, Style)],
+	content: &str,
+	scrolled: usize,
+	bg: Style,
+) {
+	let visible = trim_offset(content, scrolled);
+	let start = content.len() - visible.len();
+	let mut last = start;
+	for (range, seg_style) in segments {
+		let seg_start = range.start.max(start);
+		let seg_end = range.end.min(content.len());
+		if seg_end <= seg_start {
+			continue;
+		}
+		if seg_start > last {
+			if let Some(t) = content.get(last..seg_start) {
+				spans.push(Span::styled(t.to_string(), bg));
+			}
+		}
+		if let Some(t) = content.get(seg_start..seg_end) {
+			spans.push(Span::styled(
+				t.to_string(),
+				seg_style.patch(bg),
+			));
+		}
+		last = seg_end;
+	}
+	if last < content.len() {
+		if let Some(t) = content.get(last..) {
+			spans.push(Span::styled(t.to_string(), bg));
+		}
+	}
 }
 
 #[derive(Default)]
@@ -127,6 +248,8 @@ pub struct DiffComponent {
 	repo: RepoPathRef,
 	diff: Option<FileDiff>,
 	longest_line: usize,
+	longest_split_line: usize,
+	split_rows: Vec<SplitRow>,
 	pending: bool,
 	selection: Selection,
 	selected_hunk: Option<usize>,
@@ -155,6 +278,8 @@ impl DiffComponent {
 			selected_hunk: None,
 			diff: None,
 			longest_line: 0,
+			longest_split_line: 0,
+			split_rows: Vec::new(),
 			current_size: Cell::new((0, 0)),
 			selection: Selection::Single(0),
 			vertical_scroll: VerticalScroll::new(),
@@ -187,6 +312,8 @@ impl DiffComponent {
 		self.current = Current::default();
 		self.diff = None;
 		self.longest_line = 0;
+		self.longest_split_line = 0;
+		self.split_rows.clear();
 		self.vertical_scroll.reset();
 		self.horizontal_scroll.reset();
 		self.selection = Selection::Single(0);
@@ -236,6 +363,16 @@ impl DiffComponent {
 					len + 1
 				});
 
+			self.split_rows = self
+				.diff
+				.as_ref()
+				.map(build_split_rows)
+				.unwrap_or_default();
+			// split cells have no per-line gutter, so they are one
+			// column narrower than the unified `longest_line`.
+			self.longest_split_line =
+				self.longest_line.saturating_sub(1);
+
 			if reset_selection {
 				self.vertical_scroll.reset();
 				self.selection = Selection::Single(0);
@@ -247,6 +384,8 @@ impl DiffComponent {
 				};
 				self.update_selection(old_selection);
 			}
+
+			self.clamp_selection_to_mode();
 
 			self.spawn_highlight();
 		}
@@ -303,9 +442,30 @@ impl DiffComponent {
 		}
 	}
 
+	/// Whether the split (side-by-side) diff view is active.
+	fn is_split(&self) -> bool {
+		self.options.borrow().diff_view().is_split()
+	}
+
+	/// Whether the unified diff view is active (the default). Staging,
+	/// hunk-jumping and editing only operate in this mode.
+	fn is_unified(&self) -> bool {
+		!self.is_split()
+	}
+
+	/// Number of selectable rows in the active view: visual split rows
+	/// in split mode, flat diff lines in unified mode.
+	fn row_count(&self) -> usize {
+		if self.is_split() {
+			self.split_rows.len()
+		} else {
+			self.lines_count()
+		}
+	}
+
 	fn move_selection(&mut self, move_type: ScrollType) {
-		if let Some(diff) = &self.diff {
-			let max = diff.lines.saturating_sub(1);
+		if self.diff.is_some() {
+			let max = self.row_count().saturating_sub(1);
 
 			let new_start = match move_type {
 				ScrollType::Down => {
@@ -335,13 +495,48 @@ impl DiffComponent {
 	}
 
 	fn update_selection(&mut self, new_start: usize) {
-		if let Some(diff) = &self.diff {
-			let max = diff.lines.saturating_sub(1);
-			let new_start = cmp::min(max, new_start);
-			self.selection = Selection::Single(new_start);
-			self.selected_hunk =
-				Self::find_selected_hunk(diff, new_start);
+		if self.diff.is_none() {
+			return;
 		}
+		let max = self.row_count().saturating_sub(1);
+		let new_start = cmp::min(max, new_start);
+		self.selection = Selection::Single(new_start);
+		// hunk-jumping/staging are unified-only, so the split view
+		// keeps no selected hunk.
+		self.selected_hunk = if self.is_split() {
+			None
+		} else {
+			self.diff.as_ref().and_then(|diff| {
+				Self::find_selected_hunk(diff, new_start)
+			})
+		};
+	}
+
+	/// Clamps the selection to the active view's row count (rows differ
+	/// between unified and split) and refreshes the selected hunk.
+	/// Called on view toggle and after rebuilding the row model. Both
+	/// ends are clamped so a shift-selection survives the toggle.
+	fn clamp_selection_to_mode(&mut self) {
+		if self.diff.is_none() {
+			return;
+		}
+		let max = self.row_count().saturating_sub(1);
+		let start = cmp::min(self.selection.get_start(), max);
+		let end = cmp::min(self.selection.get_end(), max);
+		self.selection = if start == end {
+			Selection::Single(start)
+		} else {
+			Selection::Multiple(start, end)
+		};
+		// hunk-jumping/staging are unified-only, so the split view
+		// keeps no selected hunk.
+		self.selected_hunk = if self.is_split() {
+			None
+		} else {
+			self.diff
+				.as_ref()
+				.and_then(|diff| Self::find_selected_hunk(diff, end))
+		};
 	}
 
 	fn lines_count(&self) -> usize {
@@ -353,38 +548,68 @@ impl DiffComponent {
 			.saturating_sub(self.current_size.get().0.into())
 	}
 
+	/// Maximum horizontal scroll offset for a split column of the given
+	/// width (split cells carry no gutter, unlike [`Self::max_scroll_right`]).
+	fn max_scroll_right_split(&self, col_w: u16) -> usize {
+		self.longest_split_line.saturating_sub(usize::from(col_w))
+	}
+
 	fn modify_selection(&mut self, direction: Direction) {
 		if self.diff.is_some() {
-			self.selection.modify(direction, self.lines_count());
+			self.selection.modify(direction, self.row_count());
 		}
 	}
 
 	fn copy_selection(&self) {
-		if let Some(diff) = &self.diff {
-			let lines_to_copy: Vec<&str> =
-				diff.hunks
-					.iter()
-					.flat_map(|hunk| hunk.lines.iter())
-					.enumerate()
-					.filter_map(|(i, line)| {
-						if self.selection.contains(i) {
-							Some(line.content.trim_matches(|c| {
-								c == '\n' || c == '\r'
-							}))
-						} else {
-							None
-						}
-					})
-					.collect();
+		let Some(diff) = &self.diff else {
+			return;
+		};
 
-			try_or_popup!(
-				self,
-				"copy to clipboard error:",
-				crate::clipboard::copy_string(
-					&lines_to_copy.join("\n")
-				)
-			);
-		}
+		let lines_to_copy: Vec<String> = if self.is_split() {
+			// selection is a row index; prefer the new (right) side,
+			// falling back to the old (left) side for pure deletions.
+			let flat = flat_diff_lines(diff);
+			self.split_rows
+				.iter()
+				.enumerate()
+				.filter(|(row_idx, _)| {
+					self.selection.contains(*row_idx)
+				})
+				.filter_map(|(_, row)| {
+					let idx = row.right.or(row.left)?;
+					flat.get(idx).map(|line| {
+						line.content
+							.trim_matches(|c| c == '\n' || c == '\r')
+							.to_string()
+					})
+				})
+				.collect()
+		} else {
+			diff.hunks
+				.iter()
+				.flat_map(|hunk| hunk.lines.iter())
+				.enumerate()
+				.filter_map(|(i, line)| {
+					if self.selection.contains(i) {
+						Some(
+							line.content
+								.trim_matches(|c| {
+									c == '\n' || c == '\r'
+								})
+								.to_string(),
+						)
+					} else {
+						None
+					}
+				})
+				.collect()
+		};
+
+		try_or_popup!(
+			self,
+			"copy to clipboard error:",
+			crate::clipboard::copy_string(&lines_to_copy.join("\n"))
+		);
 	}
 
 	fn find_selected_hunk(
@@ -633,37 +858,18 @@ impl DiffComponent {
 		}
 
 		let visible = trim_offset(content, scrolled_right);
-		let start = content.len() - visible.len();
 		let bg = if hl_style.shows_tint() {
 			theme.diff_line_tint(line_type, selected)
 		} else {
 			theme.diff_line_highlight_bg(selected)
 		};
-		let mut last = start;
-		for (range, seg_style) in segments {
-			let seg_start = range.start.max(start);
-			let seg_end = range.end.min(content.len());
-			if seg_end <= seg_start {
-				continue;
-			}
-			if seg_start > last {
-				if let Some(t) = content.get(last..seg_start) {
-					spans.push(Span::styled(t.to_string(), bg));
-				}
-			}
-			if let Some(t) = content.get(seg_start..seg_end) {
-				spans.push(Span::styled(
-					t.to_string(),
-					seg_style.patch(bg),
-				));
-			}
-			last = seg_end;
-		}
-		if last < content.len() {
-			if let Some(t) = content.get(last..) {
-				spans.push(Span::styled(t.to_string(), bg));
-			}
-		}
+		push_clipped_spans(
+			&mut spans,
+			segments,
+			content,
+			scrolled_right,
+			bg,
+		);
 
 		let tint_row = hl_style.shows_tint()
 			&& matches!(
@@ -679,6 +885,129 @@ impl DiffComponent {
 		}
 
 		spans
+	}
+
+	/// Minimum inner (content) width required to render the split view.
+	/// Below this the columns would be uselessly narrow, so a hint is
+	/// shown instead.
+	const MIN_SPLIT_INNER_WIDTH: u16 = 48;
+
+	/// Builds the visible-window `Line`s for both split columns. `lw` /
+	/// `rw` are the column widths; only the rows in `[top, top+height)`
+	/// are materialised.
+	fn get_split_text(
+		&self,
+		lw: u16,
+		rw: u16,
+		height: usize,
+	) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+		let Some(diff) = &self.diff else {
+			return (Vec::new(), Vec::new());
+		};
+
+		let flat = flat_diff_lines(diff);
+		let highlights = self.syntax_highlight.borrow();
+		let highlights: &[Option<LineHighlight>] = &highlights;
+		let top = self.vertical_scroll.get_top();
+		let scrolled = self.horizontal_scroll.get_right();
+
+		let mut left = Vec::new();
+		let mut right = Vec::new();
+
+		for (row_idx, row) in
+			self.split_rows.iter().enumerate().skip(top).take(height)
+		{
+			let selected =
+				self.focused() && self.selection.contains(row_idx);
+			left.push(self.get_split_cell(
+				lw, row.left, &flat, highlights, selected, scrolled,
+			));
+			right.push(self.get_split_cell(
+				rw, row.right, &flat, highlights, selected, scrolled,
+			));
+		}
+
+		(left, right)
+	}
+
+	/// Renders a single split cell (one column of one row) to a `Line`.
+	/// `cell` is a FLAT diff-line index, or `None` for a blank pad cell.
+	/// Split cells carry no gutter bar and no `+`/`-` sign glyph — the
+	/// column position already conveys old-vs-new.
+	fn get_split_cell(
+		&self,
+		width: u16,
+		cell: Option<usize>,
+		flat: &[&DiffLine],
+		highlights: &[Option<LineHighlight>],
+		selected: bool,
+		scrolled: usize,
+	) -> Line<'static> {
+		let theme = &self.theme;
+
+		let Some(line) = cell.and_then(|idx| flat.get(idx).copied())
+		else {
+			// blank pad cell (no counterpart on this side)
+			return Line::from(Span::styled(
+				format!("{:w$}", "", w = width as usize),
+				theme.diff_line_highlight_bg(selected),
+			));
+		};
+
+		let is_content_line =
+			matches!(line.line_type, DiffLineType::None);
+		let content =
+			if !is_content_line && line.content.as_ref().is_empty() {
+				theme.line_break()
+			} else {
+				tabs_to_spaces(line.content.as_ref().to_string())
+			};
+
+		let hl_style = self.options.borrow().diff_highlight_style();
+		let is_header =
+			matches!(line.line_type, DiffLineType::Header);
+		let bg = if selected {
+			theme.diff_line_highlight_bg(true)
+		} else if hl_style.shows_tint()
+			&& matches!(
+				line.line_type,
+				DiffLineType::Add | DiffLineType::Delete
+			) {
+			theme.diff_line_tint(line.line_type, false)
+		} else {
+			Style::default()
+		};
+
+		let highlight = cell
+			.and_then(|idx| highlights.get(idx))
+			.and_then(Option::as_ref)
+			.map(Vec::as_slice)
+			.filter(|s| !s.is_empty() && !is_header);
+
+		let visible = trim_offset(&content, scrolled);
+		let mut spans: Vec<Span<'static>> = Vec::new();
+
+		if let Some(segments) = highlight {
+			push_clipped_spans(
+				&mut spans, segments, &content, scrolled, bg,
+			);
+		} else {
+			// no syntect highlight (off / pending / header): keep the
+			// red/green foreground via `diff_line`.
+			spans.push(Span::styled(
+				visible.to_string(),
+				theme.diff_line(line.line_type, selected),
+			));
+		}
+
+		// pad to the full column so tint/selection fills to the divider
+		let used = UnicodeWidthStr::width(visible);
+		let pad = (width as usize).saturating_sub(used);
+		if pad > 0 {
+			spans.push(Span::styled(format!("{:pad$}", ""), bg));
+		}
+
+		Line::from(spans)
 	}
 
 	const fn hunk_visible(
@@ -884,6 +1213,105 @@ impl DiffComponent {
 	const fn is_stage(&self) -> bool {
 		self.current.is_stage
 	}
+
+	/// Renders the unified (single-column) diff — the default view and
+	/// the only one that supports staging.
+	fn draw_unified(
+		&self,
+		f: &mut Frame,
+		r: Rect,
+		block: Block<'_>,
+		current_width: u16,
+		current_height: u16,
+	) {
+		self.horizontal_scroll.update_no_selection(
+			self.longest_line,
+			current_width.into(),
+		);
+
+		let txt = if self.pending {
+			vec![Line::from(vec![Span::styled(
+				Cow::from(strings::loading_text(&self.key_config)),
+				self.theme.text(false, false),
+			)])]
+		} else {
+			self.get_text(r.width, current_height)
+		};
+
+		f.render_widget(Paragraph::new(txt).block(block), r);
+
+		if self.focused() {
+			self.vertical_scroll.draw(f, r, &self.theme);
+
+			if self.max_scroll_right() > 0 {
+				self.horizontal_scroll.draw(f, r, &self.theme);
+			}
+		}
+	}
+
+	/// Renders the side-by-side (split) diff: two view-only columns
+	/// separated by a vertical divider. Falls back to a hint when the
+	/// terminal is too narrow.
+	fn draw_split(&self, f: &mut Frame, r: Rect, block: Block<'_>) {
+		let inner = block.inner(r);
+
+		if inner.width < Self::MIN_SPLIT_INNER_WIDTH {
+			let hint = vec![Line::from(Span::styled(
+				Cow::from("terminal too narrow for split view"),
+				self.theme.text(false, false),
+			))];
+			f.render_widget(
+				Paragraph::new(hint)
+					.block(block)
+					.alignment(Alignment::Center),
+				r,
+			);
+			if self.focused() {
+				self.vertical_scroll.draw(f, r, &self.theme);
+			}
+			return;
+		}
+
+		f.render_widget(block, r);
+
+		let [left, divider, right] = Layout::horizontal([
+			Constraint::Fill(1),
+			Constraint::Length(1),
+			Constraint::Fill(1),
+		])
+		.areas(inner);
+
+		self.horizontal_scroll.update_no_selection(
+			self.longest_split_line,
+			usize::from(left.width),
+		);
+
+		let (l_lines, r_lines) = self.get_split_text(
+			left.width,
+			right.width,
+			inner.height as usize,
+		);
+
+		f.render_widget(Paragraph::new(l_lines), left);
+		f.render_widget(Paragraph::new(r_lines), right);
+
+		let divider_lines = vec![
+			Line::from(Span::styled(
+				symbols::line::VERTICAL,
+				self.theme.block(self.focused()),
+			));
+			inner.height as usize
+		];
+		f.render_widget(Paragraph::new(divider_lines), divider);
+
+		if self.focused() {
+			self.vertical_scroll.draw(f, r, &self.theme);
+
+			if self.max_scroll_right_split(left.width) > 0 {
+				self.horizontal_scroll.draw(f, r, &self.theme);
+			}
+		}
+	}
 }
 
 impl DrawableComponent for DiffComponent {
@@ -900,13 +1328,8 @@ impl DrawableComponent for DiffComponent {
 
 		self.vertical_scroll.update(
 			self.selection.get_end(),
-			self.lines_count(),
+			self.row_count(),
 			usize::from(current_height),
-		);
-
-		self.horizontal_scroll.update_no_selection(
-			self.longest_line,
-			current_width.into(),
 		);
 
 		let title = format!(
@@ -915,34 +1338,33 @@ impl DrawableComponent for DiffComponent {
 			self.current.path
 		);
 
-		let txt = if self.pending {
-			vec![Line::from(vec![Span::styled(
-				Cow::from(strings::loading_text(&self.key_config)),
-				self.theme.text(false, false),
-			)])]
+		let block = Block::default()
+			.title(Span::styled(
+				title,
+				self.theme.title(self.focused()),
+			))
+			.borders(Borders::ALL)
+			.border_style(self.theme.block(self.focused()));
+
+		// split is opt-in and view-only; pending and binary diffs
+		// always fall back to the unified renderer.
+		let use_split = self.is_split()
+			&& !self.pending
+			&& self
+				.diff
+				.as_ref()
+				.is_some_and(|d| !d.hunks.is_empty());
+
+		if use_split {
+			self.draw_split(f, r, block);
 		} else {
-			self.get_text(r.width, current_height)
-		};
-
-		f.render_widget(
-			Paragraph::new(txt).block(
-				Block::default()
-					.title(Span::styled(
-						title.as_str(),
-						self.theme.title(self.focused()),
-					))
-					.borders(Borders::ALL)
-					.border_style(self.theme.block(self.focused())),
-			),
-			r,
-		);
-
-		if self.focused() {
-			self.vertical_scroll.draw(f, r, &self.theme);
-
-			if self.max_scroll_right() > 0 {
-				self.horizontal_scroll.draw(f, r, &self.theme);
-			}
+			self.draw_unified(
+				f,
+				r,
+				block,
+				current_width,
+				current_height,
+			);
 		}
 
 		Ok(())
@@ -963,12 +1385,12 @@ impl Component for DiffComponent {
 		out.push(CommandInfo::new(
 			strings::commands::diff_hunk_next(&self.key_config),
 			self.calc_hunk_move_target(1) != self.selected_hunk,
-			self.focused(),
+			self.focused() && self.is_unified(),
 		));
 		out.push(CommandInfo::new(
 			strings::commands::diff_hunk_prev(&self.key_config),
 			self.calc_hunk_move_target(-1) != self.selected_hunk,
-			self.focused(),
+			self.focused() && self.is_unified(),
 		));
 		out.push(
 			CommandInfo::new(
@@ -979,12 +1401,17 @@ impl Component for DiffComponent {
 			.hidden(),
 		);
 
+		// editing is orthogonal to the view mode, so it stays available
+		// in the split view; only staging is unified-only.
 		if !self.is_immutable {
 			out.push(CommandInfo::new(
 				strings::commands::edit_item(&self.key_config),
 				self.can_edit_file(),
 				self.focused() && self.can_edit_file(),
 			));
+		}
+
+		if !self.is_immutable && self.is_unified() {
 			out.push(CommandInfo::new(
 				strings::commands::diff_hunk_remove(&self.key_config),
 				self.selected_hunk.is_some(),
@@ -1032,6 +1459,15 @@ impl Component for DiffComponent {
 
 		out.push(CommandInfo::new(
 			strings::commands::diff_toggle_syntax(&self.key_config),
+			true,
+			self.focused(),
+		));
+
+		out.push(CommandInfo::new(
+			strings::commands::diff_toggle_split(
+				&self.key_config,
+				self.is_split(),
+			),
 			true,
 			self.focused(),
 		));
@@ -1088,13 +1524,15 @@ impl Component for DiffComponent {
 				} else if key_match(
 					e,
 					self.key_config.keys.diff_hunk_next,
-				) {
+				) && self.is_unified()
+				{
 					self.diff_hunk_move_up_down(1);
 					Ok(EventState::Consumed)
 				} else if key_match(
 					e,
 					self.key_config.keys.diff_hunk_prev,
-				) {
+				) && self.is_unified()
+				{
 					self.diff_hunk_move_up_down(-1);
 					Ok(EventState::Consumed)
 				} else if key_match(e, self.key_config.keys.edit_file)
@@ -1110,6 +1548,7 @@ impl Component for DiffComponent {
 					e,
 					self.key_config.keys.stage_unstage_item,
 				) && !self.is_immutable
+					&& self.is_unified()
 				{
 					try_or_popup!(
 						self,
@@ -1123,6 +1562,7 @@ impl Component for DiffComponent {
 					self.key_config.keys.status_reset_item,
 				) && !self.is_immutable
 					&& !self.is_stage()
+					&& self.is_unified()
 				{
 					if let Some(diff) = &self.diff {
 						if diff.untracked {
@@ -1136,6 +1576,7 @@ impl Component for DiffComponent {
 					e,
 					self.key_config.keys.diff_stage_lines,
 				) && !self.is_immutable
+					&& self.is_unified()
 				{
 					self.stage_lines();
 					Ok(EventState::Consumed)
@@ -1144,6 +1585,7 @@ impl Component for DiffComponent {
 					self.key_config.keys.diff_reset_lines,
 				) && !self.is_immutable
 					&& !self.is_stage()
+					&& self.is_unified()
 				{
 					if let Some(diff) = &self.diff {
 						//TODO: reset untracked lines
@@ -1173,6 +1615,13 @@ impl Component for DiffComponent {
 						self.spawn_highlight();
 					}
 					Ok(EventState::Consumed)
+				} else if key_match(
+					e,
+					self.key_config.keys.diff_toggle_split,
+				) {
+					self.options.borrow_mut().diff_toggle_view();
+					self.clamp_selection_to_mode();
+					Ok(EventState::Consumed)
 				} else {
 					Ok(EventState::NotConsumed)
 				};
@@ -1196,6 +1645,7 @@ mod tests {
 	use crate::{
 		app::Environment, queue::InternalEvent, ui::style::Theme,
 	};
+	use asyncgit::sync::diff::Hunk;
 	use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 	use std::io::Write;
 	use std::rc::Rc;
@@ -1304,5 +1754,341 @@ mod tests {
 			Some(InternalEvent::OpenExternalEditor(Some(path)))
 				if path == "src/main.rs"
 		));
+	}
+
+	fn diff_line(content: &str, t: DiffLineType) -> DiffLine {
+		DiffLine {
+			content: content.into(),
+			line_type: t,
+			position: DiffLinePosition::default(),
+		}
+	}
+
+	/// Builds a single-hunk `FileDiff` from a list of line types; each
+	/// line's content is `line{index}` so a copied flat index is easy
+	/// to identify.
+	fn file_diff(types: &[DiffLineType]) -> FileDiff {
+		let lines: Vec<DiffLine> = types
+			.iter()
+			.enumerate()
+			.map(|(i, &t)| diff_line(&format!("line{i}"), t))
+			.collect();
+		let count = lines.len();
+		FileDiff {
+			hunks: vec![Hunk {
+				header_hash: 0,
+				lines,
+			}],
+			lines: count,
+			untracked: false,
+			sizes: (0, 0),
+			size_delta: 0,
+		}
+	}
+
+	fn rows_of(types: &[DiffLineType]) -> Vec<SplitRow> {
+		build_split_rows(&file_diff(types))
+	}
+
+	#[test]
+	fn test_split_all_context() {
+		use DiffLineType::None;
+		let rows = rows_of(&[None, None, None]);
+		assert_eq!(
+			rows,
+			vec![
+				SplitRow {
+					left: Some(0),
+					right: Some(0)
+				},
+				SplitRow {
+					left: Some(1),
+					right: Some(1)
+				},
+				SplitRow {
+					left: Some(2),
+					right: Some(2)
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn test_split_equal_del_then_add() {
+		use DiffLineType::{Add, Delete};
+		let rows = rows_of(&[Delete, Delete, Add, Add]);
+		assert_eq!(
+			rows,
+			vec![
+				SplitRow {
+					left: Some(0),
+					right: Some(2)
+				},
+				SplitRow {
+					left: Some(1),
+					right: Some(3)
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn test_split_more_dels_than_adds() {
+		use DiffLineType::{Add, Delete};
+		let rows = rows_of(&[Delete, Delete, Delete, Add]);
+		assert_eq!(
+			rows,
+			vec![
+				SplitRow {
+					left: Some(0),
+					right: Some(3)
+				},
+				SplitRow {
+					left: Some(1),
+					right: None
+				},
+				SplitRow {
+					left: Some(2),
+					right: None
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn test_split_more_adds_than_dels() {
+		use DiffLineType::{Add, Delete};
+		let rows = rows_of(&[Delete, Add, Add, Add]);
+		assert_eq!(
+			rows,
+			vec![
+				SplitRow {
+					left: Some(0),
+					right: Some(1)
+				},
+				SplitRow {
+					left: None,
+					right: Some(2)
+				},
+				SplitRow {
+					left: None,
+					right: Some(3)
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn test_split_add_only() {
+		use DiffLineType::Add;
+		let rows = rows_of(&[Add, Add]);
+		assert_eq!(
+			rows,
+			vec![
+				SplitRow {
+					left: None,
+					right: Some(0)
+				},
+				SplitRow {
+					left: None,
+					right: Some(1)
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn test_split_delete_only() {
+		use DiffLineType::Delete;
+		let rows = rows_of(&[Delete, Delete]);
+		assert_eq!(
+			rows,
+			vec![
+				SplitRow {
+					left: Some(0),
+					right: None
+				},
+				SplitRow {
+					left: Some(1),
+					right: None
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn test_split_two_change_blocks_context_separated() {
+		use DiffLineType::{Add, Delete, None};
+		let rows = rows_of(&[Delete, Add, None, Delete, Add]);
+		assert_eq!(
+			rows,
+			vec![
+				SplitRow {
+					left: Some(0),
+					right: Some(1)
+				},
+				SplitRow {
+					left: Some(2),
+					right: Some(2)
+				},
+				SplitRow {
+					left: Some(3),
+					right: Some(4)
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn test_split_add_then_delete_flushes() {
+		// git never interleaves +/- within a block, but an Add->Delete
+		// boundary must still start a fresh change block.
+		use DiffLineType::{Add, Delete};
+		let rows = rows_of(&[Add, Delete]);
+		assert_eq!(
+			rows,
+			vec![
+				SplitRow {
+					left: None,
+					right: Some(0)
+				},
+				SplitRow {
+					left: Some(1),
+					right: None
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn test_split_header_single_row() {
+		use DiffLineType::Header;
+		let rows = rows_of(&[Header]);
+		assert_eq!(
+			rows,
+			vec![SplitRow {
+				left: Some(0),
+				right: Some(0)
+			}]
+		);
+	}
+
+	#[test]
+	fn test_split_flat_index_coverage() {
+		use DiffLineType::{Add, Delete, Header, None};
+		let types =
+			[Header, None, Delete, Delete, Add, None, Add, Delete];
+		let diff = file_diff(&types);
+		let rows = build_split_rows(&diff);
+
+		let mut left: Vec<usize> =
+			rows.iter().filter_map(|r| r.left).collect();
+		let mut right: Vec<usize> =
+			rows.iter().filter_map(|r| r.right).collect();
+
+		for (idx, t) in types.iter().enumerate() {
+			match t {
+				Header | None => {
+					// context/header span both columns
+					assert!(
+						left.contains(&idx),
+						"left missing {idx}"
+					);
+					assert!(
+						right.contains(&idx),
+						"right missing {idx}"
+					);
+				}
+				Delete => {
+					assert!(
+						left.contains(&idx),
+						"left missing {idx}"
+					);
+					assert!(
+						!right.contains(&idx),
+						"delete {idx} leaked to right"
+					);
+				}
+				Add => {
+					assert!(
+						right.contains(&idx),
+						"right missing {idx}"
+					);
+					assert!(
+						!left.contains(&idx),
+						"add {idx} leaked to left"
+					);
+				}
+			}
+		}
+
+		// every flat line index is covered somewhere
+		for idx in 0..diff.lines {
+			assert!(
+				left.contains(&idx) || right.contains(&idx),
+				"flat index {idx} not covered"
+			);
+		}
+
+		// no flat index is emitted twice on the same side
+		let l_before = left.len();
+		left.sort_unstable();
+		left.dedup();
+		assert_eq!(l_before, left.len(), "duplicate left index");
+		let r_before = right.len();
+		right.sort_unstable();
+		right.dedup();
+		assert_eq!(r_before, right.len(), "duplicate right index");
+	}
+
+	#[test]
+	fn test_split_draw_does_not_panic() {
+		let backend = ratatui::backend::TestBackend::new(100, 40);
+		let mut terminal = ratatui::Terminal::new(backend).unwrap();
+		let mut frame = terminal.get_frame();
+
+		let env = Environment::test_env();
+		{
+			let mut opts = env.options.borrow_mut();
+			opts.diff_toggle_view(); // Unified -> Split
+			opts.diff_cycle_highlight(); // Tint -> Off (no async job)
+		}
+		assert!(env.options.borrow().diff_view().is_split());
+
+		let mut diff = DiffComponent::new(&env, true);
+		diff.focus(true);
+		diff.update(
+			"file.rs".to_string(),
+			false,
+			file_diff(&[
+				DiffLineType::Header,
+				DiffLineType::None,
+				DiffLineType::Delete,
+				DiffLineType::Add,
+				DiffLineType::None,
+			]),
+		);
+
+		// wide enough: renders the two columns + divider
+		diff.draw(&mut frame, Rect::new(0, 0, 100, 40)).unwrap();
+		// too narrow: falls back to the hint — must also not panic
+		diff.draw(&mut frame, Rect::new(0, 0, 20, 40)).unwrap();
+	}
+
+	#[test]
+	fn test_split_copy_prefers_new_side() {
+		use DiffLineType::{Add, Delete, None};
+		// change row, context, pure-delete row, context, pure-add row
+		let types = [Delete, Add, None, Delete, None, Add];
+		let rows = rows_of(&types);
+
+		// copy_selection picks row.right.or(row.left) per selected row
+		let preferred: Vec<usize> =
+			rows.iter().filter_map(|r| r.right.or(r.left)).collect();
+
+		// new side (Add=1) for the change row, context (2), old side
+		// (Delete=3) for the pure deletion, context (4), new side
+		// (Add=5) for the pure addition.
+		assert_eq!(preferred, vec![1, 2, 3, 4, 5]);
 	}
 }

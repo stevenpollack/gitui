@@ -879,6 +879,25 @@ pub mod commands {
 			CMD_GROUP_DIFF,
 		)
 	}
+	pub fn diff_toggle_split(
+		key_config: &SharedKeyConfig,
+		is_split: bool,
+	) -> CommandText {
+		CommandText::new(
+			format!(
+				"{} [{}]",
+				if is_split {
+					"Unified view"
+				} else {
+					"Split view"
+				},
+				key_config
+					.get_hint(key_config.keys.diff_toggle_split),
+			),
+			"toggle side-by-side (split) diff view",
+			CMD_GROUP_DIFF,
+		)
+	}
 	pub fn close_fuzzy_finder(
 		key_config: &SharedKeyConfig,
 	) -> CommandText {
