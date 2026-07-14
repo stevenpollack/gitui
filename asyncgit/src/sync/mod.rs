@@ -5,6 +5,7 @@
 
 pub mod blame;
 pub mod branch;
+mod branch_diff;
 pub mod commit;
 mod commit_details;
 pub mod commit_files;
@@ -45,6 +46,10 @@ pub use branch::{
 	merge_ff::branch_merge_upstream_fastforward,
 	merge_rebase::merge_upstream_rebase, rename::rename_branch,
 	validate_branch_name, BranchCompare, BranchDetails, BranchInfo,
+};
+pub use branch_diff::{
+	diff_range_vs_base, diff_range_vs_ref, merge_base,
+	resolve_base_branch,
 };
 pub use commit::{amend, commit, tag_commit};
 pub use commit_details::{

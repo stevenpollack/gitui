@@ -201,6 +201,10 @@ impl Component for BranchListPopup {
 						commit_id,
 					));
 				}
+			} else if key_match(e, self.key_config.keys.diff_base)
+				&& self.valid_selection()
+			{
+				self.diff_head_vs_selected();
 			} else if key_match(
 				e,
 				self.key_config.keys.cmd_bar_toggle,
@@ -426,6 +430,46 @@ impl BranchListPopup {
 		self.branches
 			.get(usize::from(self.selection))
 			.map(|b| b.top_commit)
+	}
+
+	/// opens the compare-commits view for `HEAD` against the
+	/// selected branch (merge-base), showing the current branch's
+	/// own changes relative to the selected branch.
+	fn diff_head_vs_selected(&mut self) {
+		let base = self
+			.branches
+			.get(usize::from(self.selection))
+			.map(|b| b.name.clone());
+
+		let Some(base) = base else {
+			return;
+		};
+
+		let range = sync::diff_range_vs_ref(
+			&self.repo.borrow(),
+			"HEAD",
+			&base,
+		);
+
+		match range {
+			Ok(range) => {
+				self.hide();
+				self.queue.push(InternalEvent::OpenPopup(
+					StackablePopupOpen::CompareCommits(
+						InspectCommitOpen {
+							commit_id: range.new,
+							compare_id: Some(range.old),
+							tags: None,
+						},
+					),
+				));
+			}
+			Err(err) => {
+				self.queue.push(InternalEvent::ShowErrorMsg(
+					format!("diff vs base error:\n{err}"),
+				));
+			}
+		}
 	}
 
 	///
@@ -713,6 +757,12 @@ impl BranchListPopup {
 		out.push(CommandInfo::new(
 			strings::commands::compare_with_head(&self.key_config),
 			!selection_is_cur_branch,
+			true,
+		));
+
+		out.push(CommandInfo::new(
+			strings::commands::diff_vs_branch(&self.key_config),
+			self.valid_selection(),
 			true,
 		));
 
