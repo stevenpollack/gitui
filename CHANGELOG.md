@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.31.1] - 2026-07-15
+
 ### Fixes
-* the command bar `more`/`less` toggle ([.]) now works inside the diff/commit viewer popups (inspect commit, compare, file history, blame) — previously those modal popups swallowed the key
+* the command bar `more`/`less` toggle ([.]) now works inside the diff/commit viewer popups (inspect commit, compare, file history, blame) — previously those modal popups swallowed the key ([gitui-org/gitui#2999](https://github.com/gitui-org/gitui/pull/2999))
 
 ## [0.31.0] - 2026-07-15
 
