@@ -33,11 +33,13 @@ fn main() {
 	};
 	let build_date = now.date_naive();
 
+	// this is a fork build — mark the version as such so `gitui
+	// --version` and the help popup never read as an upstream release.
 	let build_name = if std::env::var("GITUI_RELEASE").is_ok() {
-		env!("CARGO_PKG_VERSION").to_string()
+		format!("{}-fork", env!("CARGO_PKG_VERSION"))
 	} else {
 		format!(
-			"{}-nightly {} ({})",
+			"{}-fork {} ({})",
 			env!("CARGO_PKG_VERSION"),
 			build_date,
 			get_git_hash()
