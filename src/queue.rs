@@ -155,6 +155,8 @@ pub enum InternalEvent {
 	CreateRemote,
 	///
 	OpenRepo { path: PathBuf },
+	/// open the popup that prompts for a repo path to switch to
+	OpenRepoPopup,
 	///
 	OpenResetPopup(CommitId),
 	///

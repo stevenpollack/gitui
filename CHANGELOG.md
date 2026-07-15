@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * branches popup: diff your current branch (HEAD) against the selected branch ([v], merge-base)
 * syntax highlighting in the diff view ([Shift+X] cycles style: off / gutter / +- sign / tint)
 * toggleable side-by-side (split) diff view ([Shift+V]) — view-only; unified staging unaffected
+* open a different repository from within the app ([Shift+O]) — prompts for a path and re-opens against it
 
 ### Changed
 * use [tombi](https://github.com/tombi-toml/tombi) for all toml file formatting

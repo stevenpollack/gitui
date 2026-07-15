@@ -17,11 +17,11 @@ use crate::{
 		CreateWorktreePopup, ExternalEditorPopup, FetchPopup,
 		FileRevlogPopup, FuzzyFindPopup, GotoLinePopup, HelpPopup,
 		InspectCommitOpen, InspectCommitPopup, LogSearchPopupPopup,
-		MsgPopup, OptionsPopup, PullPopup, PushPopup, PushTagsPopup,
-		RemoteListPopup, RenameBranchPopup, RenameRemotePopup,
-		ResetPopup, RevisionFilesPopup, StashMsgPopup,
-		SubmodulesListPopup, TagCommitPopup, TagListPopup,
-		UpdateRemoteUrlPopup, WorktreesPopup,
+		MsgPopup, OpenRepoPopup, OptionsPopup, PullPopup, PushPopup,
+		PushTagsPopup, RemoteListPopup, RenameBranchPopup,
+		RenameRemotePopup, ResetPopup, RevisionFilesPopup,
+		StashMsgPopup, SubmodulesListPopup, TagCommitPopup,
+		TagListPopup, UpdateRemoteUrlPopup, WorktreesPopup,
 	},
 	queue::{
 		Action, AppTabs, InternalEvent, NeedsUpdate, Queue,
@@ -91,6 +91,7 @@ pub struct App {
 	tag_commit_popup: TagCommitPopup,
 	create_branch_popup: CreateBranchPopup,
 	create_worktree_popup: CreateWorktreePopup,
+	open_repo_popup: OpenRepoPopup,
 	create_remote_popup: CreateRemotePopup,
 	rename_remote_popup: RenameRemotePopup,
 	update_remote_url_popup: UpdateRemoteUrlPopup,
@@ -216,6 +217,7 @@ impl App {
 			tag_commit_popup: TagCommitPopup::new(&env),
 			create_branch_popup: CreateBranchPopup::new(&env),
 			create_worktree_popup: CreateWorktreePopup::new(&env),
+			open_repo_popup: OpenRepoPopup::new(&env),
 			create_remote_popup: CreateRemotePopup::new(&env),
 			rename_remote_popup: RenameRemotePopup::new(&env),
 			update_remote_url_popup: UpdateRemoteUrlPopup::new(&env),
@@ -375,6 +377,10 @@ impl App {
 				{
 					self.open_diff_vs_base("HEAD");
 					NeedsUpdate::ALL
+				} else if key_match(k, self.key_config.keys.open_repo)
+				{
+					self.queue.push(InternalEvent::OpenRepoPopup);
+					NeedsUpdate::ALL
 				} else {
 					NeedsUpdate::empty()
 				};
@@ -532,6 +538,7 @@ impl App {
 			checkout_option_popup,
 			create_branch_popup,
 			create_worktree_popup,
+			open_repo_popup,
 			create_remote_popup,
 			rename_remote_popup,
 			update_remote_url_popup,
@@ -576,6 +583,7 @@ impl App {
 			checkout_option_popup,
 			create_branch_popup,
 			create_worktree_popup,
+			open_repo_popup,
 			rename_branch_popup,
 			revision_files_popup,
 			fuzzy_find_popup,
@@ -809,6 +817,9 @@ impl App {
 			}
 			InternalEvent::CreateWorktree => {
 				self.create_worktree_popup.open()?;
+			}
+			InternalEvent::OpenRepoPopup => {
+				self.open_repo_popup.open()?;
 			}
 			InternalEvent::RenameBranch(branch_ref, cur_name) => {
 				self.rename_branch_popup
@@ -1211,6 +1222,15 @@ impl App {
 		res.push(
 			CommandInfo::new(
 				strings::commands::diff_vs_base(&self.key_config),
+				true,
+				!self.any_popup_visible(),
+			)
+			.order(order::NAV),
+		);
+
+		res.push(
+			CommandInfo::new(
+				strings::commands::open_repo_popup(&self.key_config),
 				true,
 				!self.any_popup_visible(),
 			)
