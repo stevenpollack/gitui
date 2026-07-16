@@ -1625,6 +1625,30 @@ pub mod commands {
 			CMD_GROUP_GENERAL,
 		)
 	}
+	pub fn fullscreen_file(
+		key_config: &SharedKeyConfig,
+	) -> CommandText {
+		CommandText::new(
+			format!(
+				"Fullscreen [{}]",
+				key_config.get_hint(key_config.keys.enter),
+			),
+			"show the selected file fullscreen",
+			CMD_GROUP_GENERAL,
+		)
+	}
+	pub fn close_fullscreen(
+		key_config: &SharedKeyConfig,
+	) -> CommandText {
+		CommandText::new(
+			format!(
+				"Close fullscreen [{}]",
+				key_config.get_hint(key_config.keys.exit_popup),
+			),
+			"exit the fullscreen file view",
+			CMD_GROUP_GENERAL,
+		)
+	}
 	pub fn open_file_history(
 		key_config: &SharedKeyConfig,
 	) -> CommandText {

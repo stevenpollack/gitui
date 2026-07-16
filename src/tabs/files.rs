@@ -61,6 +61,12 @@ impl FilesTab {
 	pub fn file_finder_update(&mut self, file: &Path) {
 		self.files.find_file(file);
 	}
+
+	/// whether the file viewer is maximized to the whole tab; while
+	/// active the global quit key exits fullscreen instead of the app
+	pub fn is_fullscreen(&self) -> bool {
+		self.is_visible() && self.files.is_fullscreen()
+	}
 }
 
 impl DrawableComponent for FilesTab {

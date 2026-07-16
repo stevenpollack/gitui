@@ -55,6 +55,7 @@ pub struct RevisionFilesComponent {
 	visible: bool,
 	revision: Option<CommitInfo>,
 	focus: Focus,
+	fullscreen: bool,
 	key_config: SharedKeyConfig,
 	select_file: Option<PathBuf>,
 }
@@ -77,6 +78,7 @@ impl RevisionFilesComponent {
 			),
 			revision: None,
 			focus: Focus::Tree,
+			fullscreen: false,
 			key_config: env.key_config.clone(),
 			repo: env.repo.clone(),
 			select_file,
@@ -392,25 +394,43 @@ impl RevisionFilesComponent {
 			commit,
 		));
 	}
+
+	/// whether the file viewer is currently maximized to the whole tab
+	pub const fn is_fullscreen(&self) -> bool {
+		self.visible && self.fullscreen
+	}
+
+	/// maximize the file viewer to the whole tab (or restore the
+	/// tree/file split); the file view is focused while fullscreen
+	fn set_fullscreen(&mut self, fullscreen: bool) {
+		self.fullscreen = fullscreen;
+		self.focus =
+			if fullscreen { Focus::File } else { Focus::Tree };
+		self.current_file.focus(fullscreen);
+	}
 }
 
 impl DrawableComponent for RevisionFilesComponent {
 	fn draw(&self, f: &mut Frame, area: Rect) -> Result<()> {
 		if self.is_visible() {
-			let chunks = Layout::default()
-				.direction(Direction::Horizontal)
-				.constraints(
-					[
-						Constraint::Percentage(40),
-						Constraint::Percentage(60),
-					]
-					.as_ref(),
-				)
-				.split(area);
+			if self.fullscreen {
+				self.current_file.draw(f, area)?;
+			} else {
+				let chunks = Layout::default()
+					.direction(Direction::Horizontal)
+					.constraints(
+						[
+							Constraint::Percentage(40),
+							Constraint::Percentage(60),
+						]
+						.as_ref(),
+					)
+					.split(area);
 
-			self.draw_tree(f, chunks[0])?;
+				self.draw_tree(f, chunks[0])?;
 
-			self.current_file.draw(f, chunks[1])?;
+				self.current_file.draw(f, chunks[1])?;
+			}
 		}
 		Ok(())
 	}
@@ -427,6 +447,20 @@ impl Component for RevisionFilesComponent {
 		}
 
 		let is_tree_focused = matches!(self.focus, Focus::Tree);
+
+		if self.fullscreen {
+			out.push(CommandInfo::new(
+				strings::commands::close_fullscreen(&self.key_config),
+				true,
+				true,
+			));
+		} else {
+			out.push(CommandInfo::new(
+				strings::commands::fullscreen_file(&self.key_config),
+				self.tree.selected_file().is_some(),
+				true,
+			));
+		}
 
 		if is_tree_focused || force_all {
 			out.push(
@@ -478,11 +512,25 @@ impl Component for RevisionFilesComponent {
 
 		if let Event::Key(key) = event {
 			let is_tree_focused = matches!(self.focus, Focus::Tree);
+
+			if self.fullscreen
+				&& (key_match(key, self.key_config.keys.exit_popup)
+					|| key_match(key, self.key_config.keys.quit))
+			{
+				self.set_fullscreen(false);
+				return Ok(EventState::Consumed);
+			}
+
 			if is_tree_focused
 				&& tree_nav(&mut self.tree, &self.key_config, key)
 			{
 				self.selection_changed();
 				return Ok(EventState::Consumed);
+			} else if key_match(key, self.key_config.keys.enter) {
+				if self.tree.selected_file().is_some() {
+					self.set_fullscreen(!self.fullscreen);
+					return Ok(EventState::Consumed);
+				}
 			} else if key_match(key, self.key_config.keys.blame) {
 				if self.blame() {
 					self.hide();
@@ -505,7 +553,7 @@ impl Component for RevisionFilesComponent {
 					return Ok(EventState::Consumed);
 				}
 			} else if key_match(key, self.key_config.keys.move_left) {
-				if !is_tree_focused {
+				if !is_tree_focused && !self.fullscreen {
 					self.focus = Focus::Tree;
 					self.current_file.focus(false);
 					self.focus(false);

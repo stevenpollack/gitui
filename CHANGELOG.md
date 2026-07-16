@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.32.0] - 2026-07-16
+
+### Added
+* files tab: press [Enter] on a selected file to view it fullscreen (hides the file tree); [Esc] or [q] restores the tree/file split ([Enter] also toggles back)
+
 ## [0.31.2] - 2026-07-16
 
 ### Fixes

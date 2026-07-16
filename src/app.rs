@@ -600,7 +600,8 @@ impl App {
 	);
 
 	fn check_quit(&mut self, ev: &Event) -> bool {
-		if self.any_popup_visible() {
+		if self.any_popup_visible() || self.files_tab.is_fullscreen()
+		{
 			return false;
 		}
 		if let Event::Key(e) = ev {

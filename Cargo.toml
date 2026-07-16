@@ -1,6 +1,6 @@
 [package]
 name = "gitui"
-version = "0.31.2"
+version = "0.32.0"
 authors = ["extrawurst <mail@rusticorn.com>"]
 description = "blazing fast terminal-ui for git"
 edition = "2021"
