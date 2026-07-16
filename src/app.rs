@@ -310,6 +310,7 @@ impl App {
 	}
 
 	///
+	#[allow(clippy::too_many_lines)]
 	pub fn event(&mut self, ev: InputEvent) -> Result<()> {
 		log::trace!("event: {ev:?}");
 
@@ -380,6 +381,12 @@ impl App {
 				} else if key_match(k, self.key_config.keys.open_repo)
 				{
 					self.queue.push(InternalEvent::OpenRepoPopup);
+					NeedsUpdate::ALL
+				} else if key_match(
+					k,
+					self.key_config.keys.select_branch,
+				) {
+					self.queue.push(InternalEvent::SelectBranch);
 					NeedsUpdate::ALL
 				} else {
 					NeedsUpdate::empty()
@@ -1236,6 +1243,17 @@ impl App {
 				!self.any_popup_visible(),
 			)
 			.order(order::NAV),
+		);
+
+		res.push(
+			CommandInfo::new(
+				strings::commands::open_branch_select_popup(
+					&self.key_config,
+				),
+				true,
+				!self.any_popup_visible(),
+			)
+			.order(order::AVERAGE),
 		);
 
 		res.push(

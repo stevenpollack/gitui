@@ -503,13 +503,6 @@ impl Component for Revlog {
 					return Ok(EventState::Consumed);
 				} else if key_match(
 					k,
-					self.key_config.keys.select_branch,
-				) && !self.is_search_pending()
-				{
-					self.queue.push(InternalEvent::SelectBranch);
-					return Ok(EventState::Consumed);
-				} else if key_match(
-					k,
 					self.key_config.keys.status_reset_item,
 				) && !self.is_search_pending()
 				{
@@ -644,14 +637,6 @@ impl Component for Revlog {
 			true,
 			(self.visible && self.commit_details.is_visible())
 				|| force_all,
-		));
-
-		out.push(CommandInfo::new(
-			strings::commands::open_branch_select_popup(
-				&self.key_config,
-			),
-			true,
-			(self.visible && !self.is_search_pending()) || force_all,
 		));
 
 		out.push(CommandInfo::new(

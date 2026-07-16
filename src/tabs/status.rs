@@ -737,14 +737,6 @@ impl Component for Status {
 			);
 
 			out.push(CommandInfo::new(
-				strings::commands::open_branch_select_popup(
-					&self.key_config,
-				),
-				true,
-				!focus_on_diff,
-			));
-
-			out.push(CommandInfo::new(
 				strings::commands::status_push(&self.key_config),
 				self.can_push(),
 				!focus_on_diff,
@@ -864,13 +856,6 @@ impl Component for Status {
 					&& !self.index_wd.is_empty()
 				{
 					self.switch_focus(Focus::WorkDir).map(Into::into)
-				} else if key_match(
-					k,
-					self.key_config.keys.select_branch,
-				) && !self.is_focus_on_diff()
-				{
-					self.queue.push(InternalEvent::SelectBranch);
-					Ok(EventState::Consumed)
 				} else if key_match(
 					k,
 					self.key_config.keys.force_push,

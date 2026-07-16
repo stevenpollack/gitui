@@ -14,4 +14,4 @@ snapshot_kind: text
 "│                                                                                        ║"
 "│                                                                                        ║"
 "└────────────────────────────────────────────────────────────────────────────────────────┘"
-"Scroll [↑↓] Mark [˽] Details [⏎] Branches [b] Compare [⇧C] Copy Hash [y] Tag [t]  more [.]"
+"Scroll [↑↓] Mark [˽] Details [⏎] Compare [⇧C] Copy Hash [y] Tag [t] Checkout [⇧S] more [.]"
