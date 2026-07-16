@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.31.2] - 2026-07-16
+
+### Fixes
+* fetching/pulling over SSH remotes failed with a network/transport error — the `git2` 0.21 upgrade ([#2962](https://github.com/gitui-org/gitui/pull/2962)) dropped the `ssh` feature (git2 0.21 changed its defaults to none), so libgit2 was built without SSH transport; re-enabled it
+
 ## [0.31.1] - 2026-07-15
 
 ### Fixes
