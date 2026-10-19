@@ -116,6 +116,8 @@ pub enum InternalEvent {
 	///
 	CreateWorktree,
 	///
+	ViewWorktrees,
+	///
 	RenameRemote(String),
 	///
 	UpdateRemoteUrl(String, String),

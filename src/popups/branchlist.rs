@@ -120,6 +120,7 @@ impl Component for BranchListPopup {
 
 	//TODO: cleanup
 	#[allow(clippy::cognitive_complexity)]
+	#[allow(clippy::too_many_lines)]
 	fn event(&mut self, ev: &Event) -> Result<EventState> {
 		if !self.visible {
 			return Ok(EventState::NotConsumed);
@@ -143,6 +144,12 @@ impl Component for BranchListPopup {
 				&& self.local
 			{
 				self.queue.push(InternalEvent::CreateBranch);
+			} else if key_match(
+				e,
+				self.key_config.keys.create_as_worktree,
+			) && self.valid_selection()
+			{
+				self.create_as_worktree();
 			} else if key_match(e, self.key_config.keys.rename_branch)
 				&& self.valid_selection()
 			{
@@ -720,6 +727,32 @@ impl BranchListPopup {
 		));
 	}
 
+	fn create_as_worktree(&mut self) {
+		let cur_branch = &self.branches[self.selection as usize];
+		// self.queue.push(InternalEvent::CreateWorktree);
+		// self.hide();
+		let res = sync::create_worktree(
+			&self.repo.borrow(),
+			&cur_branch.name,
+		);
+
+		self.hide();
+
+		match res {
+			Ok(_) => {
+				self.queue
+					.push(InternalEvent::Update(NeedsUpdate::ALL));
+				self.queue.push(InternalEvent::ViewWorktrees);
+			}
+			Err(e) => {
+				log::error!("create worktree: {e}");
+				self.queue.push(InternalEvent::ShowErrorMsg(
+					format!("create worktree error:\n{e}"),
+				));
+			}
+		}
+	}
+
 	fn delete_branch(&self) {
 		let reference =
 			self.branches[self.selection as usize].reference.clone();
@@ -787,6 +820,11 @@ impl BranchListPopup {
 			),
 			true,
 			self.local,
+		));
+		out.push(CommandInfo::new(
+			strings::commands::create_as_worktree(&self.key_config),
+			true,
+			true,
 		));
 
 		out.push(CommandInfo::new(

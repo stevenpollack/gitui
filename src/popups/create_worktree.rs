@@ -44,7 +44,14 @@ impl Component for CreateWorktreePopup {
 			self.input.commands(out, force_all);
 
 			out.push(CommandInfo::new(
-				strings::commands::create_worktree_confirm_msg(
+				strings::commands::create_worktree_name_confirm_msg(
+					&self.key_config,
+				),
+				true,
+				true,
+			));
+			out.push(CommandInfo::new(
+				strings::commands::create_worktree_from_branch_confirm_msg(
 					&self.key_config,
 				),
 				true,
@@ -64,6 +71,12 @@ impl Component for CreateWorktreePopup {
 			if let Event::Key(e) = ev {
 				if key_match(e, self.key_config.keys.enter) {
 					self.create_worktree();
+				} else if key_match(
+					e,
+					self.key_config.keys.open_branches,
+				) {
+					self.hide();
+					self.queue.push(InternalEvent::SelectBranch);
 				}
 
 				return Ok(EventState::Consumed);

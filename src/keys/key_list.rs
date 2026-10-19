@@ -95,6 +95,7 @@ pub struct KeysList {
 	pub toggle_signoff: GituiKeyEvent,
 	pub toggle_verify: GituiKeyEvent,
 	pub copy: GituiKeyEvent,
+	pub open_branches: GituiKeyEvent,
 	pub create_branch: GituiKeyEvent,
 	pub rename_branch: GituiKeyEvent,
 	pub select_branch: GituiKeyEvent,
@@ -120,6 +121,7 @@ pub struct KeysList {
 	pub stage_unstage_item: GituiKeyEvent,
 	pub tag_annotate: GituiKeyEvent,
 	pub view_submodules: GituiKeyEvent,
+	pub create_as_worktree: GituiKeyEvent,
 	pub view_worktrees: GituiKeyEvent,
 	pub lock_worktree: GituiKeyEvent,
 	pub diff_base: GituiKeyEvent,
@@ -139,6 +141,7 @@ pub struct KeysList {
 
 #[rustfmt::skip]
 impl Default for KeysList {
+	#[allow(clippy::too_many_lines)]
 	fn default() -> Self {
 		Self {
 			tab_status: GituiKeyEvent::new(KeyCode::Char('1'), KeyModifiers::empty()),
@@ -199,6 +202,7 @@ impl Default for KeysList {
 			toggle_signoff: GituiKeyEvent::new(KeyCode::Char('s'),  KeyModifiers::CONTROL),
 			toggle_verify: GituiKeyEvent::new(KeyCode::Char('f'),  KeyModifiers::CONTROL),
 			copy: GituiKeyEvent::new(KeyCode::Char('y'),  KeyModifiers::empty()),
+			open_branches: GituiKeyEvent::new(KeyCode::Char('o'),  KeyModifiers::CONTROL),
 			create_branch: GituiKeyEvent::new(KeyCode::Char('c'),  KeyModifiers::empty()),
 			rename_branch: GituiKeyEvent::new(KeyCode::Char('r'),  KeyModifiers::empty()),
 			select_branch: GituiKeyEvent::new(KeyCode::Char('b'),  KeyModifiers::empty()),
@@ -224,6 +228,7 @@ impl Default for KeysList {
 			stage_unstage_item: GituiKeyEvent::new(KeyCode::Enter,  KeyModifiers::empty()),
 			tag_annotate: GituiKeyEvent::new(KeyCode::Char('a'),  KeyModifiers::CONTROL),
 			view_submodules: GituiKeyEvent::new(KeyCode::Char('S'),  KeyModifiers::SHIFT),
+			create_as_worktree: GituiKeyEvent::new(KeyCode::Char('w'),  KeyModifiers::CONTROL),
 			view_worktrees: GituiKeyEvent::new(KeyCode::Char('W'),  KeyModifiers::SHIFT),
 			lock_worktree: GituiKeyEvent::new(KeyCode::Char('l'),  KeyModifiers::empty()),
 			diff_base: GituiKeyEvent::new(KeyCode::Char('v'),  KeyModifiers::empty()),

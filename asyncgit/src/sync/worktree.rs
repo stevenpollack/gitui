@@ -2,7 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use git2::{Repository, WorktreeLockStatus, WorktreePruneOptions};
+use git2::{
+	Repository, WorktreeAddOptions, WorktreeLockStatus,
+	WorktreePruneOptions,
+};
 use scopetime::scope_time;
 
 use super::status::{get_status, StatusType};
@@ -134,24 +137,63 @@ fn linked_worktree_info(
 	})
 }
 
-/// Creates a new linked worktree at `worktree_path`, checking out a
-/// new branch named after the final path component.
+/// Creates a new linked worktree, checking out a branch (new or existing)
+/// named `worktree_name`.
 ///
-/// `worktree_path` may be absolute or relative to the repository's
-/// working directory. Returns the absolute path of the created
-/// worktree.
+/// The worktree is created as a sibling directory with the pattern
+/// `{repo_name}.{worktree_name}`. Returns the absolute path of the
+/// created worktree.
 pub fn create_worktree(
 	repo_path: &RepoPath,
-	worktree_path: &str,
+	worktree_name: &str,
 ) -> Result<PathBuf> {
 	scope_time!("create_worktree");
 
 	let repo = repo(repo_path)?;
 
-	let requested = Path::new(worktree_path);
+	// the directory with .git is the root of the worktrees
+	// find its parent to get the dir with the central branch
+	let repo_main_branch_path =
+		repo.commondir().parent().ok_or_else(|| {
+			Error::Generic(
+				"cannot determine repository root directory"
+					.to_string(),
+			)
+		})?;
+
+	// the ending of the above should give us repo_name
+	let repo_name =
+		repo_main_branch_path.file_name().ok_or_else(|| {
+			Error::Generic(
+				"cannot extract repository name from path"
+					.to_string(),
+			)
+		})?;
+
+	let repo_name = repo_name.to_str().ok_or_else(|| {
+		Error::Generic(
+			"repository name contains invalid UTF-8".to_string(),
+		)
+	})?;
+
+	// get the parent of the repo so then we can concatenate the worktree
+	let repo_parent_dir =
+		repo_main_branch_path.parent().ok_or_else(|| {
+			Error::Generic(
+				"cannot create worktree: repository is at filesystem root"
+					.to_string(),
+			)
+		})?;
+
+	// stitch the original repo name with the worktree name "/path/to/parent_of_repo/repo_name.worktree_name"
+	let repo_with_new_worktree =
+		format!("{repo_name}.{worktree_name}");
+
+	// bring it all together to get "/path/to/parent_of_repo/repo_name.worktree_name"
+	let requested = repo_parent_dir.join(&repo_with_new_worktree);
 
 	let target = if requested.is_absolute() {
-		requested.to_path_buf()
+		requested
 	} else {
 		repo.workdir().ok_or(Error::NoWorkDir)?.join(requested)
 	};
@@ -165,7 +207,13 @@ pub fn create_worktree(
 					.to_string(),
 			)
 		})?
-		.to_string();
+		.split('.')
+		.next_back()
+		.ok_or_else(|| {
+			Error::Generic(
+				"cannot extract worktree name from path".to_string(),
+			)
+		})?;
 
 	// libgit2 only creates the leaf directory, not missing parents
 	// (unlike `git worktree add`), so create the parent chain first
@@ -174,7 +222,17 @@ pub fn create_worktree(
 		std::fs::create_dir_all(parent)?;
 	}
 
-	let worktree = repo.worktree(&name, &target, None)?;
+	let mut worktree_options = WorktreeAddOptions::new();
+
+	if repo
+		.find_branch(worktree_name, git2::BranchType::Local)
+		.is_ok()
+	{
+		worktree_options.checkout_existing(true);
+	}
+
+	let worktree =
+		repo.worktree(name, &target, Some(&worktree_options))?;
 
 	Ok(worktree.path().to_path_buf())
 }

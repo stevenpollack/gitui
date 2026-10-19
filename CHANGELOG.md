@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+* worktrees: create worktree from an existing branch ([Ctrl+W] in branches popup)
+* worktrees: create worktree as sibling directory (e.g., `/path/to/repo.feature` instead of `/path/to/repo/worktrees/feature`)
+
+### Changed
+* worktrees: prompt to delete associated local branch when removing a worktree
+
 ## [0.33.0] - 2026-07-16
 
 ### Changed

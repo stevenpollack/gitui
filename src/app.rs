@@ -981,6 +981,10 @@ impl App {
 			InternalEvent::CheckoutOption(branch) => {
 				self.checkout_option_popup.open(branch)?;
 			}
+			InternalEvent::ViewWorktrees => {
+				self.worktree_popup.open()?;
+				// self.checkout_option_popup.open(branch)?;
+			}
 		}
 
 		Ok(flags)
@@ -1033,15 +1037,7 @@ impl App {
 				self.select_branch_popup.update_branches()?;
 			}
 			Action::DeleteWorktree(name) => {
-				if let Err(e) =
-					sync::remove_worktree(&self.repo.borrow(), &name)
-				{
-					self.queue.push(InternalEvent::ShowErrorMsg(
-						e.to_string(),
-					));
-				}
-				self.worktree_popup.update_worktrees()?;
-				flags.insert(NeedsUpdate::ALL);
+				self.delete_worktree(&name, flags)?;
 			}
 			Action::DeleteRemoteBranch(branch_ref) => {
 				self.delete_remote_branch(&branch_ref)?;
@@ -1135,6 +1131,28 @@ impl App {
 
 		self.select_branch_popup.update_branches()?;
 
+		Ok(())
+	}
+
+	fn delete_worktree(
+		&mut self,
+		name: &str,
+		flags: &mut NeedsUpdate,
+	) -> Result<()> {
+		match sync::remove_worktree(&self.repo.borrow(), name) {
+			Ok(()) => {
+				self.worktree_popup.update_worktrees()?;
+				flags.insert(NeedsUpdate::ALL);
+				// prompt to also delete the associated branch
+				self.queue.push(InternalEvent::ConfirmAction(
+					Action::DeleteLocalBranch(name.to_string()),
+				));
+			}
+			Err(e) => {
+				self.queue
+					.push(InternalEvent::ShowErrorMsg(e.to_string()));
+			}
+		}
 		Ok(())
 	}
 
